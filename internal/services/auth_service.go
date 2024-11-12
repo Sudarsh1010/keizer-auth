@@ -2,14 +2,14 @@ package services
 
 import (
 	"fmt"
-	"time"
-
-	"github.com/redis/go-redis/v9"
-
 	"keizer-auth/internal/models"
 	"keizer-auth/internal/repositories"
 	"keizer-auth/internal/utils"
 	"keizer-auth/internal/validators"
+	"time"
+
+	"github.com/nrednav/cuid2"
+	"github.com/redis/go-redis/v9"
 )
 
 type AuthService struct {
@@ -21,26 +21,40 @@ func NewAuthService(userRepo *repositories.UserRepository, redisRepo *repositori
 	return &AuthService{userRepo: userRepo, redisRepo: redisRepo}
 }
 
-func (as *AuthService) RegisterUser(userRegister *validators.SignUpUser) error {
+func (as *AuthService) RegisterUser(userRegister *validators.SignUpUser) (string, error) {
 	passwordHash, err := utils.HashPassword(userRegister.Password)
 	if err != nil {
-		return fmt.Errorf("failed to hash password: %w", err)
+		return "", fmt.Errorf("failed to hash password: %w", err)
 	}
 
 	otp, err := utils.GenerateOTP()
 	if err != nil {
-		return fmt.Errorf("failed to generate OTP: %w", err)
+		return "", fmt.Errorf("failed to generate OTP: %w", err)
 	}
 
-	err = as.redisRepo.Set("registration-verification-otp-"+userRegister.Email, otp, time.Minute)
+	id := cuid2.Generate()
+	hashOtp, err := utils.HashPassword(otp)
 	if err != nil {
-		return fmt.Errorf("failed to save otp in redis: %w", err)
+		return "", fmt.Errorf("failed to hash OTP: %w", err)
 	}
 
-	// TODO: email should be sent using async func
-	if err = SendOTPEmail(userRegister.Email, otp); err != nil {
-		return fmt.Errorf("failed to send OTP email: %w", err)
+	otpData := map[string]interface{}{
+		"otp_hash": hashOtp,
+		"email":    userRegister.Email,
 	}
+
+	err = as.redisRepo.HSet(id, otpData, time.Minute*3)
+	if err != nil {
+		return "", fmt.Errorf("failed to save otp in redis: %w", err)
+	}
+
+	err = as.redisRepo.Expire(id, time.Minute*3)
+	if err != nil {
+		return "", fmt.Errorf("failed to set expiration for otp in redis: %w", err)
+	}
+
+	// TODO: track status, add reties
+	go SendOTPEmail(userRegister.Email, otp)
 
 	if err = as.userRepo.CreateUser(&models.User{
 		Email:        userRegister.Email,
@@ -48,14 +62,14 @@ func (as *AuthService) RegisterUser(userRegister *validators.SignUpUser) error {
 		LastName:     userRegister.LastName,
 		PasswordHash: passwordHash,
 	}); err != nil {
-		return err
+		return "", err
 	}
 
-	return nil
+	return id, nil
 }
 
 func (as *AuthService) VerifyOTP(verifyOtpBody *validators.VerifyOTP) (bool, error) {
-	val, err := as.redisRepo.Get(verifyOtpBody.Email)
+	otpData, err := as.redisRepo.HGetAll(verifyOtpBody.Id)
 	if err != nil {
 		if err == redis.Nil {
 			return false, fmt.Errorf("otp expired")
@@ -63,8 +77,5 @@ func (as *AuthService) VerifyOTP(verifyOtpBody *validators.VerifyOTP) (bool, err
 		return false, fmt.Errorf("failed to get otp from redis %w", err)
 	}
 
-	if val != verifyOtpBody.Otp {
-		return false, nil
-	}
-	return true, nil
+	return utils.VerifyPassword(verifyOtpBody.Otp, otpData["otp_hash"])
 }

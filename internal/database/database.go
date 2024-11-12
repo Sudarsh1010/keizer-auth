@@ -3,12 +3,11 @@ package database
 import (
 	"context"
 	"fmt"
+	"keizer-auth/internal/models"
 	"log"
 	"os"
 	"strconv"
 	"time"
-
-	"keizer-auth/internal/models"
 
 	_ "github.com/joho/godotenv/autoload"
 	"gorm.io/driver/postgres"
@@ -86,7 +85,6 @@ func autoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&models.User{},
 		&models.Domain{},
-		&models.Session{},
 	)
 }
 

@@ -3,7 +3,6 @@ package controllers
 import (
 	"errors"
 	"fmt"
-
 	"keizer-auth/internal/services"
 	"keizer-auth/internal/utils"
 	"keizer-auth/internal/validators"
@@ -37,7 +36,8 @@ func (ac *AuthController) SignUp(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"errors": errors})
 	}
 
-	if err := ac.authService.RegisterUser(user); err != nil {
+	id, err := ac.authService.RegisterUser(user)
+	if err != nil {
 		if errors.Is(err, gorm.ErrCheckConstraintViolated) {
 			return c.
 				Status(fiber.StatusBadRequest).
@@ -51,7 +51,7 @@ func (ac *AuthController) SignUp(c *fiber.Ctx) error {
 			JSON(fiber.Map{"error": "Failed to sign up user"})
 	}
 
-	return c.JSON(fiber.Map{"message": "User Signed Up!"})
+	return c.JSON(fiber.Map{"id": id, "message": "User Signed Up!"})
 }
 
 func (ac *AuthController) VerifyOTP(c *fiber.Ctx) error {
@@ -80,10 +80,12 @@ func (ac *AuthController) VerifyOTP(c *fiber.Ctx) error {
 	if err != nil {
 		return fmt.Errorf("error parsing uuid %w", err)
 	}
+
 	sessionId, err := ac.sessionService.CreateSession(parsedUuid)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create session"})
 	}
+
 	utils.SetSessionCookie(c, sessionId)
 
 	return c.JSON(fiber.Map{"message": "OTP Verified!"})
